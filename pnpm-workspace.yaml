@@ -1,0 +1,8 @@
+packages: ["."]
+# pnpm 12 (nœud) lit allowBuilds ; pnpm 11 (laptop) lit onlyBuiltDependencies.
+allowBuilds:
+  esbuild: true
+  sharp: true
+  unrs-resolver: true
+onlyBuiltDependencies: [esbuild, sharp, msgpackr-extract, unrs-resolver]
+verifyDepsBeforeRun: false
