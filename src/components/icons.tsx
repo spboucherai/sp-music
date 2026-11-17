@@ -41,8 +41,8 @@ export const ISpinner = ({ size = 22, ...p }: P) => <svg width={size} height={si
 /** Music SP mark: a record whose groove opens into a play wedge. */
 export const ILogo = ({ size = 28, ...p }: P) => (
   <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden {...p}>
-    <defs><linearGradient id="msp-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="var(--accent)" /><stop offset="1" stopColor="var(--accent-2)" /></linearGradient></defs>
-    <rect width="32" height="32" rx="9" fill="url(#msp-g)" />
+    {/* Solid accent fill: a gradient referenced by id breaks when another copy of the logo sits in a hidden container. */}
+    <rect width="32" height="32" rx="9" fill="var(--accent)" />
     <circle cx="16" cy="16" r="9.200" fill="none" stroke="#150b08" strokeWidth="2.200" strokeDasharray="44 14" strokeLinecap="round" transform="rotate(-38 16 16)" />
     <path d="M13.400 11.600v8.800l7.400-4.400-7.400-4.400Z" fill="#150b08" />
   </svg>

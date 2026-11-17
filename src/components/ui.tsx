@@ -129,18 +129,21 @@ function hue(seed: string): number { let h = 0; for (let i = 0; i < seed.length;
 
 /** Square cover with a loading state; without artwork, an original generated placeholder (never a stock image). */
 export function Artwork({ artworkId, seed, size = 320, className = "", rounded = "rounded-xl", priority }: { artworkId: string | null | undefined; seed: string; size?: 96 | 320 | 640; className?: string; rounded?: string; priority?: boolean }) {
-  const [loaded, setLoaded] = useState(false);
-  const [failed, setFailed] = useState(false);
+  // Load state is keyed by the image address, so a new artwork starts from "loading" without an effect that could
+  // wipe the state of an image the browser already had in its cache.
+  const src = artworkId ? `/api/v1/art/${artworkId}?s=${size}` : null;
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const loaded = !!src && loadedSrc === src, failed = !!src && failedSrc === src;
   const h = hue(seed || "music");
-  useEffect(() => { setLoaded(false); setFailed(false); }, [artworkId]);
   return (
     <div className={`relative aspect-square overflow-hidden bg-raised ${rounded} ${className}`}>
-      {artworkId && !failed ? (
+      {src && !failed ? (
         <>
           {!loaded && <div className="skeleton absolute inset-0" />}
-          <img src={`/api/v1/art/${artworkId}?s=${size}`} alt="" loading={priority ? "eager" : "lazy"} decoding="async" draggable={false}
-            ref={(el) => { if (el?.complete && el.naturalWidth > 0) setLoaded(true); }}
-            onLoad={() => setLoaded(true)} onError={() => setFailed(true)}
+          <img key={src} src={src!} alt="" loading={priority ? "eager" : "lazy"} decoding="async" draggable={false}
+            ref={(el) => { if (el?.complete && el.naturalWidth > 0) setLoadedSrc(src); }}
+            onLoad={() => setLoadedSrc(src)} onError={() => setFailedSrc(src)}
             className={`h-full w-full object-cover transition-opacity duration-300 ${loaded ? "opacity-100" : "opacity-0"}`} />
         </>
       ) : (
