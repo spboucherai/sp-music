@@ -3,6 +3,7 @@ import { readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { sql } from "../lib/db";
 import { env } from "../lib/env";
+import { claimLyrics, transcribeTrack } from "../server/lyrics";
 import { buildRendition, processUpload, pruneOrphans, reanalyseTrack, uploadTmpPath } from "../server/ingest";
 
 /**
@@ -34,6 +35,7 @@ async function recoverStale() {
   await sql`UPDATE uploads SET status = 'received', updated_at = now() WHERE status IN ('validating', 'extracting') AND updated_at < now() - interval '15 minutes' AND attempts < 3`;
   await sql`UPDATE uploads SET status = 'error', error_code = 'processing_interrupted', updated_at = now() WHERE status IN ('validating', 'extracting') AND updated_at < now() - interval '15 minutes'`;
   await sql`UPDATE tracks SET compat_state = 'queued' WHERE compat_state = 'working' AND updated_at < now() - interval '45 minutes'`;
+  await sql`UPDATE lyrics SET state = 'queued' WHERE state = 'working' AND updated_at < now() - interval '45 minutes'`;
 }
 
 async function housekeeping() {
@@ -59,7 +61,7 @@ async function housekeeping() {
 }
 
 async function main() {
-  console.log(`[worker] started (storage ${env.storageDriver}, renditions ${env.renditions})`);
+  console.log(`[worker] started (storage ${env.storageDriver}, renditions ${env.renditions}, lyrics ${env.lyrics})`);
   let lastBeat = 0, lastHouse = 0;
   while (!stopping) {
     try {
@@ -72,6 +74,8 @@ async function main() {
       if (an) { await reanalyseTrack(an).catch((e) => console.error("[worker] analysis failed", an, e instanceof Error ? e.message : e)); continue; }
       const r = await claimRendition();
       if (r) { await buildRendition(r); continue; }
+      const ly = await claimLyrics();
+      if (ly) { await transcribeTrack(ly); continue; }
       await sleep(1500);
     } catch (e) {
       console.error("[worker] loop error", e instanceof Error ? `${e.name}: ${e.message}` : String(e));

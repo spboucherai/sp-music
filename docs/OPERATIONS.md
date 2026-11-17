@@ -61,6 +61,22 @@ git add -A && git commit -m "…" && git push origin main
 
 Les migrations sont transactionnelles et ne s'appliquent qu'une fois ; une migration appliquée puis modifiée fait échouer le déploiement (somme de contrôle). Ne jamais `mld move sp-music` sans déplacer la base et la bibliothèque (voir Restauration).
 
+## Paroles synchronisées (karaoké)
+
+Les paroles sont transcrites **sur le nœud** à partir de l'audio (mlx-whisper, modèle `whisper-large-v3-turbo`), avec un
+horodatage par mot ; rien n'est envoyé à un service externe et aucun site de paroles n'est interrogé.
+
+```bash
+uv venv ~/.venvs/whisper --python 3.12 && uv pip install -p ~/.venvs/whisper mlx-whisper     # une fois
+# .env : LYRICS=auto (ou manual), LYRICS_PYTHON=$HOME/.venvs/whisper/bin/python
+node_modules/.bin/tsx scripts/lyrics.ts --missing --wait            # toute la bibliothèque
+node_modules/.bin/tsx scripts/lyrics.ts --album "Thriller" --lang en --overwrite
+```
+
+- `LYRICS=auto` met aussi en file chaque nouvel import ; `manual` laisse l'administrateur décider (`/admin` → Bibliothèque → sélection → Paroles).
+- La transcription d'une voix chantée sur de la musique reste imparfaite (mots mal entendus, langue mal détectée quand une piste commence par une longue intro : préciser la langue). Chaque ligne se corrige dans `/admin` → Bibliothèque → icône Paroles de la piste ; une correction manuelle n'est jamais écrasée sans demande explicite.
+- Une piste sans voix est marquée « instrumental ». Les phrases inventées par le modèle sur du silence (« Thank you », « Sous-titrage… ») sont filtrées (`src/server/lyrics.ts`).
+
 ## Sauvegarde
 
 `scripts/backup.sh`, chaque nuit (PM2 `sp-music-backup`) :

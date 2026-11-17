@@ -13,6 +13,7 @@ const trackCols = (userId: string) => sql`
   json_build_object('id', ar.id, 'name', ar.name) AS artist,
   json_build_object('id', al.id, 'title', al.title, 'artworkId', al.artwork_id, 'artistName', aar.name) AS album,
   g.name AS genre,
+  (SELECT ly.state FROM lyrics ly WHERE ly.track_id = t.id) AS "lyricsState",
   EXISTS (SELECT 1 FROM favorites f WHERE f.user_id = ${userId} AND f.track_id = t.id) AS favorite`;
 const trackFrom = sql`
   FROM tracks t JOIN artists ar ON ar.id = t.artist_id JOIN albums al ON al.id = t.album_id

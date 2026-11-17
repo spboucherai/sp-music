@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ApiError, body } from "../http";
 import type { UserContext } from "../auth";
 import * as adm from "@/server/admin";
+import { deleteLyrics, LANGUAGES, requestLyrics, saveLyrics } from "@/server/lyrics";
 import { albumPatch, ids, invite, oneOf, page, trackPatch, uuid } from "./schemas";
 import type { RouteDef } from "./router";
 
@@ -30,6 +31,14 @@ export const adminRoutes: RouteDef<UserContext>[] = [
   ["PUT", "albums/:id/order", async ({ req, params, ctx }) => { const b = await body(req, z.object({ trackIds: ids }).strict()); return adm.reorderAlbum(ctx, uuid.parse(params.id), b.trackIds); }],
   ["PUT", "albums/:id/artwork", ({ req, params, ctx }) => adm.setAlbumArtwork(ctx, uuid.parse(params.id), req)],
   ["POST", "albums/:id/delete", async ({ req, params, ctx }) => { await body(req, z.object({ confirm: z.literal(true) }).strict()); return adm.deleteAlbum(ctx, uuid.parse(params.id)); }],
+
+  // Lyrics
+  ["POST", "lyrics/generate", async ({ req, ctx }) => { const b = await body(req, z.object({ ids, language: z.enum(LANGUAGES).nullable().optional(), overwrite: z.boolean().optional() }).strict()); return requestLyrics(ctx, b.ids, b.language ?? null, b.overwrite ?? false); }],
+  ["PUT", "tracks/:id/lyrics", async ({ req, params, ctx }) => {
+    const b = await body(req, z.object({ language: z.enum(LANGUAGES).nullable().optional(), lines: z.array(z.object({ t: z.number().int().min(0).max(86_400_000), e: z.number().int().min(0).max(86_400_000), text: z.string().max(300) }).strict()).max(2000) }).strict());
+    return saveLyrics(ctx, uuid.parse(params.id), b.lines, b.language ?? null);
+  }],
+  ["DELETE", "tracks/:id/lyrics", ({ params, ctx }) => deleteLyrics(ctx, uuid.parse(params.id))],
 
   // Accounts
   ["GET", "users", async () => ({ items: await adm.listUsers() })],

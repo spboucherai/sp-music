@@ -6,8 +6,11 @@ import { useLocale, useT } from "@/i18n";
 import type { Key } from "@/i18n/messages";
 import { useCurrentTrack, usePlayer, usePlayerActions, useProgress, type PlayerError } from "./player";
 import { Artwork, FavButton, NowBars, useFavorite } from "./ui";
+import { LyricsView } from "./lyrics-view";
+import { ILyrics } from "./icons";
 import { IAlert, IChevronDown, IClose, IDown, INext, IPause, IPlay, IPrev, IQueue, IRepeat, IRepeatOne, IShuffle, ISpinner, IUp, IVolume } from "./icons";
 
+export type PlayerTab = "now" | "lyrics" | "queue";
 const ERR: Record<Exclude<PlayerError, null>, Key> = { network: "player.err.network", decode: "player.err.decode", unsupported: "player.err.unsupported", unavailable: "player.err.unavailable", preparing_failed: "player.err.preparing" };
 
 function Seek({ compact }: { compact?: boolean }) {
@@ -73,7 +76,7 @@ function ErrorLine() {
 }
 
 /** Compact bar: phone mini-player (above the tab bar) and desktop player bar (full width, bottom). */
-export function PlayerBar({ onOpen }: { onOpen: (tab: "now" | "queue") => void }) {
+export function PlayerBar({ onOpen }: { onOpen: (tab: PlayerTab) => void }) {
   const t = useT(); const locale = useLocale();
   const s = usePlayer(); const a = usePlayerActions(); const tr = useCurrentTrack();
   const { positionMs, durationMs } = useProgress();
@@ -121,6 +124,7 @@ export function PlayerBar({ onOpen }: { onOpen: (tab: "now" | "queue") => void }
           </div>
           <div className="flex items-center justify-end gap-2">
             <Volume />
+            <button className="icon-btn" onClick={() => onOpen("lyrics")} aria-label={t("lyrics.title")} title={t("lyrics.title")}><ILyrics size={20} /></button>
             <button className="icon-btn" onClick={() => onOpen("queue")} aria-label={t("queue.title")} title={t("queue.title")}><IQueue size={20} /></button>
           </div>
         </div>
@@ -164,7 +168,7 @@ function QueueList() {
 }
 
 /** Full-screen "now playing" with the queue as a second tab. */
-export function NowPlaying({ open, tab, onTab, onClose }: { open: boolean; tab: "now" | "queue"; onTab: (t: "now" | "queue") => void; onClose: () => void }) {
+export function NowPlaying({ open, tab, onTab, onClose }: { open: boolean; tab: PlayerTab; onTab: (t: PlayerTab) => void; onClose: () => void }) {
   const t = useT(); const locale = useLocale();
   const s = usePlayer(); const a = usePlayerActions(); const tr = useCurrentTrack();
   const fav = useFavorite();
@@ -182,12 +186,26 @@ export function NowPlaying({ open, tab, onTab, onClose }: { open: boolean; tab: 
       <div className="relative flex items-center justify-between px-3 pb-1" style={{ paddingTop: "calc(var(--safe-t) + 10px)" }}>
         <button className="icon-btn" onClick={onClose} aria-label={t("common.close")} autoFocus><IChevronDown size={24} /></button>
         <div className="flex rounded-full border border-line bg-surface p-1" role="tablist">
-          {(["now", "queue"] as const).map((k) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => onTab(k)} className={`rounded-full px-4 py-1.5 text-xs font-bold ${tab === k ? "bg-ink text-bg" : "text-muted"}`}>{t(k === "now" ? "player.nowPlaying" : "queue.title")}</button>)}
+          {(["now", "lyrics", "queue"] as const).map((k) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => onTab(k)} className={`rounded-full px-3.5 py-1.5 text-xs font-bold ${tab === k ? "bg-ink text-bg" : "text-muted"}`}>{t(k === "now" ? "player.nowShort" : k === "lyrics" ? "lyrics.title" : "queue.title")}</button>)}
         </div>
         <span className="w-10" />
       </div>
       {tab === "queue" ? (
         <div className="relative mx-auto w-full max-w-xl flex-1 overflow-y-auto px-4 py-3" style={{ paddingBottom: "calc(1rem + var(--safe-b))" }}><QueueList /></div>
+      ) : tab === "lyrics" ? (
+        <div className="relative mx-auto flex min-h-0 w-full max-w-2xl flex-1 flex-col px-4">
+          <div className="min-h-0 flex-1"><LyricsView track={tr} /></div>
+          {/* A compact transport stays under the lyrics. */}
+          <div className="glass -mx-4 border-t border-line px-5 pt-2" style={{ paddingBottom: "calc(0.6rem + var(--safe-b))" }}>
+            <p className="truncate text-center text-xs text-muted"><span className="font-semibold text-ink">{tr.title}</span> — {tr.artist.name}</p>
+            <Seek compact />
+            <div className="flex items-center justify-center gap-4">
+              <button className="icon-btn" onClick={a.prev} aria-label={t("player.prev")}><IPrev size={22} /></button>
+              <PlayPause size={24} />
+              <button className="icon-btn" onClick={a.next} aria-label={t("player.next")}><INext size={22} /></button>
+            </div>
+          </div>
+        </div>
       ) : (
         <div className="relative mx-auto flex w-full max-w-md flex-1 flex-col justify-between gap-4 overflow-y-auto px-7 pt-3" style={{ paddingBottom: "calc(1.25rem + var(--safe-b))" }}>
           <div className="mx-auto w-full max-w-[min(100%,44dvh)]"><Artwork artworkId={tr.album.artworkId} seed={tr.album.title} size={640} rounded="rounded-2xl" className="shadow-2xl shadow-black/60" priority /></div>
@@ -211,7 +229,8 @@ export function NowPlaying({ open, tab, onTab, onClose }: { open: boolean; tab: 
             <div className="mt-3 flex items-center justify-between gap-3">
               <span className="chip">{audioInfo(tr, locale)}{s.variant === "compat" ? ` → ${t("player.compat")}` : ""}</span>
               <Volume />
-              <button className="icon-btn" onClick={() => onTab("queue")} aria-label={t("queue.title")}><IQueue size={22} /></button>
+              <span className="flex"><button className="icon-btn" onClick={() => onTab("lyrics")} aria-label={t("lyrics.title")}><ILyrics size={22} /></button>
+              <button className="icon-btn" onClick={() => onTab("queue")} aria-label={t("queue.title")}><IQueue size={22} /></button></span>
             </div>
           </div>
         </div>

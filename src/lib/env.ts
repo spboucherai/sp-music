@@ -49,5 +49,12 @@ export const env = {
   get ffmpeg() { return opt("FFMPEG_PATH") ?? "ffmpeg"; },
   get ffprobe() { return opt("FFPROBE_PATH") ?? "ffprobe"; },
 
+  // Lyrics (speech-to-text on the node, optional)
+  /** off: feature hidden. manual: an administrator asks for lyrics. auto: also queued for every new import. */
+  get lyrics(): "off" | "manual" | "auto" { const v = opt("LYRICS") ?? "off"; if (v !== "off" && v !== "manual" && v !== "auto") throw new Error("LYRICS must be off, manual or auto"); return v; },
+  /** Python of a virtualenv that has mlx-whisper installed. */
+  get lyricsPython() { return opt("LYRICS_PYTHON"); },
+  get lyricsModel() { return opt("LYRICS_MODEL") ?? "mlx-community/whisper-large-v3-turbo"; },
+
   get backupDir() { return opt("BACKUP_DIR"); },
 };

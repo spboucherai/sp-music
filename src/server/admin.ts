@@ -357,6 +357,7 @@ export async function health() {
     imports: { counts: Object.fromEntries(statuses.map((s) => [s.status, s.n])), recentErrors },
     worker: { ok: hb.age !== null && hb.age < 120, ageSec: hb.age },
     backup: { configured: !!env.backupDir, last: backup },
+    lyrics: { mode: env.lyrics, configured: env.lyrics !== "off" && !!env.lyricsPython, model: env.lyricsModel, counts: Object.fromEntries((await sql<{ state: string; n: number }[]>`SELECT state, count(*)::int AS n FROM lyrics GROUP BY state`).map((r) => [r.state, r.n])) },
     config: { renditions: env.renditions, renditionBitrateKbps: env.renditionBitrateK, transcodeDsd: env.transcodeDsd, maxFileBytes: env.maxFileBytes, uploadRetentionDays: env.uploadRetentionDays, rpId: env.rpId, origin: env.appUrl },
   };
 }

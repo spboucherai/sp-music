@@ -213,6 +213,8 @@ export async function processUpload(id: string): Promise<void> {
       return tid;
     }) as string;
     for (const k of oldKeys) await st.delete(k).catch(() => {});
+    // New audio → new lyrics (hand-corrected ones are kept unless the file itself was replaced).
+    if (env.lyrics === "auto" && env.lyricsPython) await sql`INSERT INTO lyrics (track_id, state) VALUES (${trackId}, 'queued') ON CONFLICT (track_id) DO UPDATE SET state = 'queued', edited = false, updated_at = now() WHERE ${!!replacing}`;
     if (replacing) {
       await audit({ userId: u.user_id, actor: "admin", action: "track.replaced", entity: "track", entityId: trackId, meta: { sha256: sha, reason: same ? "same_file" : "same_track" } });
       await pruneOrphans();

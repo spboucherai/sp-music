@@ -356,3 +356,41 @@ describe("library management", () => {
     expect(h.storage.available).toBe(true); expect(h.storage.usedBytes).toBeGreaterThan(0); expect(h.worker.ok).toBe(true); expect(h.library.tracks).toBeGreaterThanOrEqual(5);
   });
 });
+
+describe("lyrics", () => {
+  const enabled = process.env.LYRICS === "manual" && existsSync(`${process.env.TEST_FIXTURES}/speech.flac`);
+  it.skipIf(!enabled)("transcribes a track with word timings, marks an instrumental as empty, and keeps hand corrections", async () => {
+    const up = await owner.upload("speech.flac", fixture("speech.flac"));
+    expect(up.body.status).toBe("ready");
+    const id = up.body.trackId as string;
+    expect((await owner.json(`/api/v1/library/tracks/${id}/lyrics`)).body).toMatchObject({ state: "none", enabled: true });
+    // a listener can read lyrics but never ask for or edit them
+    expect((await listener.json("/api/v1/admin/lyrics/generate", { json: { ids: [id] } })).status).toBe(403);
+    expect((await listener.json(`/api/v1/admin/tracks/${id}/lyrics`, { method: "PUT", json: { lines: [] } })).status).toBe(403);
+    expect((await owner.json("/api/v1/admin/lyrics/generate", { json: { ids: [id, trackB], language: "en" } })).body).toMatchObject({ queued: 2 });
+    type L = { state: string; lines: { t: number; e: number; text: string; w?: [number, number, string][] }[]; edited?: boolean };
+    const wait = async (tid: string) => { for (let i = 0; i < 200; i++) { const l = (await owner.json(`/api/v1/library/tracks/${tid}/lyrics`)).body as unknown as L; if (!["queued", "working"].includes(l.state)) return l; await sleep(500); } throw new Error("lyrics timeout"); };
+    const spoken = await wait(id);
+    expect(spoken.state).toBe("ready");
+    const all = spoken.lines.map((l) => l.text).join(" ").toLowerCase();
+    expect(all).toContain("fox"); expect(all).toContain("cluster");
+    const words = spoken.lines.flatMap((l) => l.w ?? []);
+    expect(words.length).toBeGreaterThan(8);
+    for (let i = 1; i < words.length; i++) expect(words[i][0]).toBeGreaterThanOrEqual(words[i - 1][0]);      // monotonic timings
+    expect(spoken.lines[0].t).toBeLessThan(2000);
+    expect((await wait(trackB)).state).toBe("empty");                                                           // a sine wave has no words
+    expect(((await listener.json(`/api/v1/library/tracks/${id}/lyrics`)).body as unknown as L).state).toBe("ready");
+    expect(((await owner.json(`/api/v1/library/tracks/${id}`)).body as unknown as { lyricsState: string }).lyricsState).toBe("ready");
+    // correction by hand: unchanged lines keep their word timings, the edited one loses them
+    const edited = spoken.lines.map((l, i) => ({ t: l.t, e: l.e, text: i === 0 ? "Texte corrigé" : l.text }));
+    expect((await owner.json(`/api/v1/admin/tracks/${id}/lyrics`, { method: "PUT", json: { lines: edited } })).status).toBe(200);
+    const after = (await owner.json(`/api/v1/library/tracks/${id}/lyrics`)).body as unknown as L;
+    expect(after.edited).toBe(true); expect(after.lines[0].text).toBe("Texte corrigé"); expect(after.lines[0].w).toBeUndefined();
+    if (after.lines.length > 1) expect(after.lines[1].w!.length).toBeGreaterThan(0);
+    // regenerating does not overwrite a correction unless asked to
+    expect((await owner.json("/api/v1/admin/lyrics/generate", { json: { ids: [id] } })).body).toMatchObject({ queued: 0, skipped: 1 });
+    expect((await owner.json(`/api/v1/admin/tracks/${id}/lyrics`, { method: "DELETE" })).status).toBe(200);
+    expect((await owner.json(`/api/v1/library/tracks/${id}/lyrics`)).body).toMatchObject({ state: "none" });
+  });
+  it.skipIf(enabled)("is skipped: no local mlx-whisper virtualenv", () => { console.warn("lyrics tests skipped (LYRICS_PYTHON not available)"); });
+});

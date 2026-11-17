@@ -23,6 +23,8 @@ interface Actions {
   playNext(tracks: Track[]): void; addToQueue(tracks: Track[]): void; removeAt(index: number): void; move(from: number, to: number): void; clearUpcoming(): void;
   setShuffle(on: boolean): void; cycleRepeat(): void; setVolume(v: number): void; retry(): void;
   patchTrack(id: string, patch: Partial<Track>): void;
+  /** Current position read from the audio clock (for frame-accurate displays such as lyrics). */
+  positionMs(): number;
 }
 export interface Progress { positionMs: number; durationMs: number; bufferedMs: number }
 
@@ -199,6 +201,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setVolume(v) { const a = audioRef.current; const vol = Math.min(1, Math.max(0, v)); if (a) a.volume = vol; set({ volume: vol }); },
     retry() { const s = ref.current, t = s.queue[s.index]; if (t) { consecutiveErrors.current = 0; load(t, { play: true, atMs: progressRef.current.positionMs }); } },
     patchTrack(id, patch) { set((s) => ({ queue: s.queue.map((q) => (q.id === id ? { ...q, ...patch } : q)) })); },
+    positionMs() { const a = audioRef.current; return a && loadedKey.current ? a.currentTime * 1000 : progressRef.current.positionMs; },
   }), [advance, goTo, load, set]);
 
   const progressRef = useRef(progress); progressRef.current = progress;

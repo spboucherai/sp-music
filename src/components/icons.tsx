@@ -19,6 +19,7 @@ export const ISearch = (p: P) => <svg {...base(p)}><circle cx="10.800" cy="10.80
 export const IHome = (p: P) => <svg {...base(p)}><circle cx="12" cy="12" r="8.500" /><circle cx="12" cy="12" r="2.600" /><path d="M12 3.500v2.200" /></svg>;
 export const ILibrary = (p: P) => <svg {...base(p)}><rect x="3.500" y="4" width="4" height="16" rx="1" /><rect x="10" y="4" width="4" height="16" rx="1" /><path d="m16.800 6.300 3-.8 3.300 12.800-3 .8z" transform="translate(-2.200 0)" /></svg>;
 export const IList = (p: P) => <svg {...base(p)}><path d="M4 6.500h10M4 11.500h10M4 16.500h6" /><path d="M17.500 6v9.200" /><circle cx="15.600" cy="16.300" r="2" /><path d="M17.500 6c1.800.300 3 1.300 3 3" /></svg>;
+export const ILyrics = (p: P) => <svg {...base(p)}><path d="M5 5.500h14a1.500 1.500 0 0 1 1.500 1.500v8a1.500 1.500 0 0 1-1.500 1.500h-6l-4 3.500v-3.500H5A1.500 1.500 0 0 1 3.500 15V7A1.500 1.500 0 0 1 5 5.500Z" /><path d="M7.500 9.500h9M7.500 12.800h5.500" /></svg>;
 export const IChevronDown = (p: P) => <svg {...base(p)}><path d="m5.500 9 6.500 6.500L18.500 9" /></svg>;
 export const IChevronRight = (p: P) => <svg {...base(p)}><path d="m9 5.500 6.500 6.500L9 18.500" /></svg>;
 export const IChevronLeft = (p: P) => <svg {...base(p)}><path d="M15 5.500 8.500 12l6.500 6.500" /></svg>;

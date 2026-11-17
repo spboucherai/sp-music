@@ -16,6 +16,8 @@ export STORAGE_ROOT="$ROOT/library" SETUP_URL_FILE="$ROOT/setup-url.txt" TEST_FI
 export BACKUP_DIR="$ROOT/backups" BACKUP_PASSPHRASE_FILE="$ROOT/pass"
 export UPLOAD_MAX_FILE_MB=50 UPLOAD_MAX_CHUNK_MB=4 ARCHIVE_MAX_TOTAL_MB=30 RENDITIONS=auto TRANSCODE_DSD=false LIBRARY_QUOTA_GB=0
 unset WEBAUTHN_RP_ID TMP_DIR || true
+# Lyrics tests need a local mlx-whisper virtualenv; without one they are skipped (and say so).
+if [ -x "${LYRICS_PYTHON:-$HOME/.venvs/whisper/bin/python}" ]; then export LYRICS=manual LYRICS_PYTHON="${LYRICS_PYTHON:-$HOME/.venvs/whisper/bin/python}"; else export LYRICS=off; unset LYRICS_PYTHON || true; fi
 echo "test-passphrase" > "$BACKUP_PASSPHRASE_FILE"
 
 dropdb --if-exists "$DB"; createdb "$DB"
@@ -34,6 +36,9 @@ ff -f lavfi -i "sine=frequency=880:duration=3" -c:a flac -metadata title="Zip Un
 ff -f lavfi -i "sine=frequency=990:duration=3" -c:a flac -metadata title="Zip Deux" -metadata artist="Archive" -metadata album="Zippé" -metadata track=2 "$F/z2.flac"
 ff -f lavfi -i "sine=frequency=445:duration=6" -c:a flac -metadata title="Onde À" -metadata artist="Les Sinusoïdes" -metadata album="Fréquences" -metadata album_artist="Les Sinusoïdes" -metadata track="1/2" "$F/a-other-encoding.flac"
 ff -f lavfi -i "anullsrc=r=44100:cl=stereo" -t 250 -c:a pcm_s16le "$F/silence.wav"
+# Spoken fixture (macOS speech synthesis) for the lyrics transcription test.
+say -o "$F/speech.aiff" "The quick brown fox jumps over the lazy dog. Music lives on the cluster tonight." 2>/dev/null \
+  && ff -i "$F/speech.aiff" -c:a flac -metadata title="Paroles Test" -metadata artist="Synthèse" -metadata album="Voix" "$F/speech.flac" || true
 printf 'MZ\x90\x00\x03\x00\x00\x00 this is not audio, it is a program' > "$F/program.flac"
 printf 'just some text pretending to be music\n' > "$F/text.mp3"
 { printf 'fLaC'; head -c 4000 /dev/urandom; } > "$F/broken.flac"

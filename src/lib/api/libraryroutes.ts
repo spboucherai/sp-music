@@ -5,6 +5,7 @@ import { ApiError, body } from "../http";
 import { rateLimit } from "../ratelimit";
 import type { UserContext } from "../auth";
 import * as cat from "@/server/catalog";
+import { getLyrics } from "@/server/lyrics";
 import { ids, oneOf, page, playbackState, playlistName, uuid } from "./schemas";
 import type { RouteDef } from "./router";
 
@@ -45,5 +46,6 @@ export const libraryRoutes: RouteDef<UserContext>[] = [
     await sql`UPDATE tracks SET compat_state = 'queued', compat_error = NULL WHERE id = ${id} AND compat_state IN ('none', 'error', 'disabled')`;
     return { compatState: "queued" };
   }],
+  ["GET", "tracks/:id/lyrics", ({ params }) => getLyrics(uuid.parse(params.id))],
   ["GET", "tracks/:id", async ({ params, ctx }) => { const [t] = await cat.getTracks(ctx.userId, [uuid.parse(params.id)]); if (!t) throw new ApiError(404, "not_found"); return t; }],
 ];

@@ -7,7 +7,7 @@ import type { Me } from "@/lib/types";
 import { I18nProvider, useT } from "@/i18n";
 import type { Key } from "@/i18n/messages";
 import { PlayerProvider, useCurrentTrack, usePlayerActions } from "./player";
-import { NowPlaying, PlayerBar } from "./player-ui";
+import { NowPlaying, PlayerBar, type PlayerTab } from "./player-ui";
 import { MeProvider, ToastProvider, TrackMenuProvider } from "./ui";
 import { IGear, IHeart, IHome, ILibrary, IList, ILogo, ISearch, IUser } from "./icons";
 
@@ -24,7 +24,7 @@ function Chrome({ me, children }: { me: Me; children: ReactNode }) {
   const path = usePathname();
   const track = useCurrentTrack();
   const actions = usePlayerActions();
-  const [sheet, setSheet] = useState<{ open: boolean; tab: "now" | "queue" }>({ open: false, tab: "now" });
+  const [sheet, setSheet] = useState<{ open: boolean; tab: PlayerTab }>({ open: false, tab: "now" });
   const close = useCallback(() => setSheet((s) => ({ ...s, open: false })), []);
   useEffect(() => { close(); }, [path, close]);
   // Space bar toggles playback when no control or field has the focus.

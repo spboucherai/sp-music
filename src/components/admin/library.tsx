@@ -1,11 +1,12 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, getCsrf } from "@/lib/client-api";
-import type { Album, Paged, Track } from "@/lib/types";
+import type { Album, LyricLine, Lyrics, Paged, Track } from "@/lib/types";
 import { audioInfo, fmtTime } from "@/lib/format";
 import { useLocale, useT } from "@/i18n";
 import { Artwork, Async, Confirm, Empty, Sheet, useApi, useErrorText, useToast } from "@/components/ui";
-import { IChevronDown, IChevronRight, IDown, IEdit, IRefresh, ISpinner, ITrash, IUp } from "@/components/icons";
+import { IChevronDown, IChevronRight, IDown, IEdit, ILyrics, IRefresh, ISpinner, ITrash, IUp } from "@/components/icons";
+import type { Key } from "@/i18n/messages";
 
 type Fields = { title: string; artist: string; album: string; albumArtist: string; trackNo: string; discNo: string; year: string; genre: string };
 const EMPTY: Fields = { title: "", artist: "", album: "", albumArtist: "", trackNo: "", discNo: "", year: "", genre: "" };
@@ -112,6 +113,57 @@ function AlbumEditor({ album, onClose, onSaved }: { album: Album; onClose: () =>
   );
 }
 
+
+const LANGS = ["fr", "en", "es", "it", "de", "pt"] as const;
+
+/** Asks the worker to transcribe the selected tracks. */
+function LyricsRequest({ tracks, onClose, onDone }: { tracks: Track[]; onClose: () => void; onDone: () => void }) {
+  const t = useT(); const toast = useToast(); const text = useErrorText();
+  const [language, setLanguage] = useState(""); const [overwrite, setOverwrite] = useState(false); const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true);
+    try { const r = await api<{ queued: number; skipped: number }>("/api/v1/admin/lyrics/generate", { body: { ids: tracks.map((x) => x.id), language: language || null, overwrite } }); toast(t("lyrics.queuedN", { n: r.queued, skipped: r.skipped })); onDone(); onClose(); }
+    catch (e) { toast(text(e), "error"); } finally { setBusy(false); }
+  };
+  return (
+    <Sheet open onClose={onClose} title={t("lyrics.generateTitle", { n: tracks.length })} footer={<><button className="btn" onClick={onClose}>{t("common.cancel")}</button><button className="btn btn-primary" onClick={go} disabled={busy}>{busy && <ISpinner size={16} />}{t("lyrics.generate")}</button></>}>
+      <p className="mb-4 text-sm leading-relaxed text-muted">{t("lyrics.generateBody")}</p>
+      <label className="label" htmlFor="ly-lang">{t("lyrics.language")}</label>
+      <select id="ly-lang" className="input" value={language} onChange={(e) => setLanguage(e.target.value)}>
+        <option value="">{t("lyrics.langAuto")}</option>{LANGS.map((l) => <option key={l} value={l}>{t(`lang.${l}` as Key)}</option>)}</select>
+      <label className="mt-4 flex items-start gap-2.5 text-sm"><input type="checkbox" className="mt-0.5 h-4 w-4 accent-[var(--accent)]" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} /><span>{t("lyrics.overwrite")}</span></label>
+    </Sheet>
+  );
+}
+
+/** Line-by-line correction of the transcribed text. Timings are kept. */
+function LyricsEditor({ track, onClose, onSaved }: { track: Track; onClose: () => void; onSaved: () => void }) {
+  const t = useT(); const toast = useToast(); const text = useErrorText();
+  const res = useApi<Lyrics>(`/api/v1/library/tracks/${track.id}/lyrics`);
+  const [lines, setLines] = useState<LyricLine[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (res.data && lines === null) setLines(res.data.lines); }, [res.data, lines]);
+  const save = async () => {
+    setBusy(true);
+    try { await api(`/api/v1/admin/tracks/${track.id}/lyrics`, { method: "PUT", body: { language: res.data?.language && (LANGS as readonly string[]).includes(res.data.language) ? res.data.language : null, lines: (lines ?? []).map((l) => ({ t: l.t, e: l.e, text: l.text })) } }); toast(t("admin.saved")); onSaved(); onClose(); }
+    catch (e) { toast(text(e), "error"); } finally { setBusy(false); }
+  };
+  const remove = async () => { setBusy(true); try { await api(`/api/v1/admin/tracks/${track.id}/lyrics`, { method: "DELETE" }); onSaved(); onClose(); } catch (e) { toast(text(e), "error"); } finally { setBusy(false); } };
+  return (
+    <Sheet open onClose={onClose} wide title={`${t("lyrics.editTitle")} — ${track.title}`}
+      footer={<><button className="btn btn-danger mr-auto" onClick={remove} disabled={busy || res.data?.state === "none"}>{t("lyrics.deleteAll")}</button><button className="btn" onClick={onClose}>{t("common.cancel")}</button><button className="btn btn-primary" onClick={save} disabled={busy || lines === null}>{busy && <ISpinner size={16} />}{t("common.save")}</button></>}>
+      <p className="mb-3 text-sm leading-relaxed text-muted">{t("lyrics.editHelp")}</p>
+      <Async res={res}>{() => (lines ?? []).length === 0 ? <p className="py-6 text-center text-sm text-muted">{t("lyrics.noneTitle")}</p> : (
+        <ol className="space-y-1.5">{(lines ?? []).map((l, i) => (
+          <li key={`${l.t}-${i}`} className="flex items-center gap-2">
+            <span className="w-12 flex-none text-right text-xs tabular-nums text-faint">{fmtTime(l.t)}</span>
+            <input className="input !min-h-9 !text-sm" aria-label={t("lyrics.lineAt", { time: fmtTime(l.t) })} value={l.text} maxLength={300} onChange={(e) => setLines((x) => x!.map((y, k) => (k === i ? { ...y, text: e.target.value } : y)))} />
+            <button className="icon-btn !h-8 !w-8 text-muted" onClick={() => setLines((x) => x!.filter((_, k) => k !== i))} aria-label={t("lyrics.removeLine", { time: fmtTime(l.t) })}><ITrash size={15} /></button>
+          </li>))}</ol>)}</Async>
+    </Sheet>
+  );
+}
+
 function AlbumRow({ album, open, onToggle, onChanged }: { album: Album; open: boolean; onToggle: () => void; onChanged: () => void }) {
   const t = useT(); const locale = useLocale(); const toast = useToast(); const text = useErrorText();
   const res = useApi<{ album: Album; tracks: Track[] }>(open ? `/api/v1/library/albums/${album.id}` : null);
@@ -120,7 +172,12 @@ function AlbumRow({ album, open, onToggle, onChanged }: { album: Album; open: bo
   const [editAlbum, setEditAlbum] = useState(false);
   const [del, setDel] = useState<{ kind: "album" } | { kind: "tracks"; tracks: Track[] } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [lyReq, setLyReq] = useState<Track[] | null>(null);
+  const [lyEdit, setLyEdit] = useState<Track | null>(null);
   const tracks = res.data?.tracks ?? [];
+  // While a transcription is in progress, refresh the album so its status chips move on their own.
+  const transcribing = tracks.some((x) => x.lyricsState === "queued" || x.lyricsState === "working");
+  useEffect(() => { if (!transcribing) return; const iv = setInterval(res.reload, 3000); return () => clearInterval(iv); }, [transcribing, res.reload]);
   const selected = useMemo(() => tracks.filter((x) => sel.has(x.id)), [tracks, sel]);
   const changed = () => { setSel(new Set()); res.reload(); onChanged(); };
   const move = async (i: number, d: -1 | 1) => {
@@ -159,6 +216,7 @@ function AlbumRow({ album, open, onToggle, onChanged }: { album: Album; open: bo
               <span className="flex-1" />
               <button className="btn btn-sm" disabled={!sel.size} onClick={() => setEdit(selected)}><IEdit size={14} />{t("admin.editSel")}</button>
               <button className="btn btn-sm" disabled={!sel.size} onClick={() => void reanalyse(selected.map((x) => x.id))}><IRefresh size={14} />{t("admin.reanalyse")}</button>
+              <button className="btn btn-sm" disabled={!sel.size} onClick={() => setLyReq(selected)}><ILyrics size={14} />{t("lyrics.title")}</button>
               <button className="btn btn-sm btn-danger" disabled={!sel.size} onClick={() => setDel({ kind: "tracks", tracks: selected })}><ITrash size={14} />{t("common.delete")}</button>
             </div>
             <ol className="divide-y divide-line/60">{tracks.map((tr, i) => (
@@ -168,16 +226,20 @@ function AlbumRow({ album, open, onToggle, onChanged }: { album: Album; open: bo
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm">{tr.title}</p>
                   <p className="truncate text-xs text-muted">{tr.artist.name} · {audioInfo(tr, locale)} · {fmtTime(tr.durationMs)}
-                    {tr.webPlayable !== "yes" && <span className={`chip ml-1.5 !py-0 ${tr.compatState === "ready" ? "chip-ok" : tr.compatState === "error" ? "chip-err" : "chip-warn"}`}>{t(tr.compatState === "ready" ? "admin.compatReady" : tr.compatState === "disabled" ? "admin.compatOff" : tr.compatState === "error" ? "admin.compatError" : "admin.compatPending")}</span>}</p>
+                    {tr.webPlayable !== "yes" && <span className={`chip ml-1.5 !py-0 ${tr.compatState === "ready" ? "chip-ok" : tr.compatState === "error" ? "chip-err" : "chip-warn"}`}>{t(tr.compatState === "ready" ? "admin.compatReady" : tr.compatState === "disabled" ? "admin.compatOff" : tr.compatState === "error" ? "admin.compatError" : "admin.compatPending")}</span>}
+                    {tr.lyricsState && <span className={`chip ml-1.5 !py-0 ${tr.lyricsState === "ready" ? "chip-ok" : tr.lyricsState === "error" ? "chip-err" : tr.lyricsState === "empty" ? "" : "chip-accent"}`}>{t(`lyrics.s.${tr.lyricsState}` as Key)}</span>}</p>
                 </div>
                 <button className="icon-btn !h-8 !w-8 text-muted" disabled={i === 0 || tracks[i - 1].discNo !== tr.discNo} onClick={() => void move(i, -1)} aria-label={t("queue.moveUp", { title: tr.title })}><IUp size={16} /></button>
                 <button className="icon-btn !h-8 !w-8 text-muted" disabled={i === tracks.length - 1 || tracks[i + 1].discNo !== tr.discNo} onClick={() => void move(i, 1)} aria-label={t("queue.moveDown", { title: tr.title })}><IDown size={16} /></button>
+                <button className="icon-btn !h-8 !w-8 text-muted" onClick={() => setLyEdit(tr)} aria-label={`${t("lyrics.editTitle")} : ${tr.title}`}><ILyrics size={16} /></button>
                 <button className="icon-btn !h-8 !w-8 text-muted" onClick={() => setEdit([tr])} aria-label={`${t("admin.editTrack")} : ${tr.title}`}><IEdit size={16} /></button>
               </li>))}</ol>
           </>)}</Async>
         </div>
       )}
       {edit && <TrackEditor tracks={edit} onClose={() => setEdit(null)} onSaved={changed} />}
+      {lyReq && <LyricsRequest tracks={lyReq} onClose={() => setLyReq(null)} onDone={res.reload} />}
+      {lyEdit && <LyricsEditor track={lyEdit} onClose={() => setLyEdit(null)} onSaved={res.reload} />}
       {editAlbum && <AlbumEditor album={album} onClose={() => setEditAlbum(false)} onSaved={changed} />}
       <Confirm open={!!del} onClose={() => setDel(null)} onConfirm={doDelete} busy={busy} danger title={t(del?.kind === "album" ? "admin.deleteAlbum" : "admin.deleteTracks")} confirmLabel={t("admin.deleteForever")}
         body={<>
