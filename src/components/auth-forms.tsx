@@ -101,7 +101,7 @@ function LoginInner() {
             <form className="mt-3 flex gap-2" onSubmit={(e) => { e.preventDefault(); void submitCode(); }}>
               <label htmlFor="code" className="sr-only">{t("auth.recoveryCode")}</label>
               <input id="code" className="input font-mono" placeholder="xxxx-xxxx-xxxx" autoComplete="one-time-code" autoCapitalize="none" spellCheck={false} value={code} onChange={(e) => setCode(e.target.value)} />
-              <button className="btn" disabled={busy || code.trim().length < 8}>{t("auth.submitCode")}</button>
+              <button className="btn" disabled={busy || code.trim().length < 8}>{t("auth.useCode")}</button>
             </form>
             <p className="mt-3 text-xs leading-relaxed text-faint">{t("auth.recoveryShell")}</p>
           </div>
