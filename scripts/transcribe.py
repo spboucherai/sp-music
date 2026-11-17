@@ -6,7 +6,17 @@ Prints one JSON object on stdout: {"language": "fr", "segments": [{start, end, t
 compression_ratio, words: [{start, end, word}]}]}. Called by the worker with an argument vector (no shell).
 """
 import json
+import math
 import sys
+
+
+def num(value, fallback: float) -> float:
+    """Whisper yields NaN for a segment with no tokens (silence, pure instrumental); NaN is not valid JSON."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return f if math.isfinite(f) else fallback
 
 
 def main() -> None:
@@ -26,11 +36,11 @@ def main() -> None:
     for s in result.get("segments", []):
         out["segments"].append({
             "start": float(s["start"]), "end": float(s["end"]), "text": s["text"],
-            "no_speech_prob": float(s.get("no_speech_prob", 0)), "avg_logprob": float(s.get("avg_logprob", 0)),
-            "compression_ratio": float(s.get("compression_ratio", 0)),
+            "no_speech_prob": num(s.get("no_speech_prob"), 0.0), "avg_logprob": num(s.get("avg_logprob"), -5.0),
+            "compression_ratio": num(s.get("compression_ratio"), 0.0),
             "words": [{"start": float(w["start"]), "end": float(w["end"]), "word": w["word"]} for w in s.get("words", [])],
         })
-    json.dump(out, sys.stdout, ensure_ascii=False)
+    json.dump(out, sys.stdout, ensure_ascii=False, allow_nan=False)
 
 
 if __name__ == "__main__":
