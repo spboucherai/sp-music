@@ -23,13 +23,19 @@ export const origin = () => new URL(env.appUrl).origin;
 
 // ── Sessions ────────────────────────────────────────────────────────────────────────────────────────
 
-/** A new session (new random token) is issued at every authentication: the identifier is never reused. */
-export async function createSession(userId: string, method: "passkey" | "recovery_code" | "setup", req: Request): Promise<void> {
+/** Inserts the session row and returns the raw token (only its SHA-256 is stored). */
+async function insertSession(userId: string, method: string, req: Request, days = SESSION_DAYS) {
   const token = randomToken(32);
   const csrf = randomToken(24);
-  const expires = new Date(Date.now() + SESSION_DAYS * 86_400_000);
+  const expires = new Date(Date.now() + days * 86_400_000);
   await sql`INSERT INTO sessions (user_id, token_hash, csrf_token, method, user_agent, ip, expires_at)
             VALUES (${userId}, ${sha256(token)}, ${csrf}, ${method}, ${(req.headers.get("user-agent") ?? "").slice(0, 300)}, ${clientIp(req)}, ${expires})`;
+  return { token, csrf, expires };
+}
+
+/** A new session (new random token) is issued at every authentication: the identifier is never reused. */
+export async function createSession(userId: string, method: "passkey" | "recovery_code" | "setup", req: Request): Promise<void> {
+  const { token, expires } = await insertSession(userId, method, req);
   const jar = await cookies();
   // Host-only cookie (no Domain attribute): it is never sent to another spboucher.ai sub-domain.
   jar.set(SESSION_COOKIE, token, { httpOnly: true, secure: env.isProd, sameSite: "lax", path: "/", expires });
@@ -228,4 +234,63 @@ export async function loginWithRecoveryCode(code: string, req: Request) {
   await createSession(row.user_id, "recovery_code", req);
   await audit({ userId: row.user_id, actor: "system", action: "login.recovery_code", ip: clientIp(req) });
   return { ok: true };
+}
+
+// ── Device linking (native apps) ────────────────────────────────────────────────────────────────────
+// The app asks for a pairing and shows a short code; a browser that is already signed in (with a passkey) approves
+// it; the app, which polls with its own secret, then receives a session of its own. The browser never sees the
+// app's secret and the app never sees the browser's session.
+
+const DEVICE_TTL_MIN = 10;
+const DEVICE_SESSION_DAYS = 90;
+const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTVWXYZ23456789";       // no 0/O, 1/I/L, U
+const newUserCode = () => { const b = randomBytes(8); let c = ""; for (let i = 0; i < 8; i++) c += CODE_ALPHABET[b[i] % CODE_ALPHABET.length]; return `${c.slice(0, 4)}-${c.slice(4)}`; };
+export const normalizeUserCode = (raw: string) => { const c = raw.toUpperCase().replace(/[^A-Z0-9]/g, ""); return c.length === 8 ? `${c.slice(0, 4)}-${c.slice(4)}` : ""; };
+
+export async function startDeviceLink(deviceName: string, req: Request) {
+  const deviceCode = randomToken(32);
+  await sql`DELETE FROM device_links WHERE expires_at < now() - interval '1 day'`;
+  for (let attempt = 0; ; attempt++) {
+    const userCode = newUserCode();
+    try {
+      await sql`INSERT INTO device_links (device_hash, user_code, device_name, ip, expires_at)
+                VALUES (${sha256(deviceCode)}, ${userCode}, ${deviceName.trim().slice(0, 80)}, ${clientIp(req)}, now() + ${DEVICE_TTL_MIN} * interval '1 minute')`;
+      return { deviceCode, userCode, verificationUrl: `${env.appUrl}/appareil?code=${userCode}`, expiresIn: DEVICE_TTL_MIN * 60, interval: 2 };
+    } catch (e) { if ((e as { code?: string }).code !== "23505" || attempt >= 4) throw e; }
+  }
+}
+
+/** What the approving browser is shown. Says the same thing for an unknown, expired or already decided code. */
+export async function deviceLinkInfo(userCode: string) {
+  const [d] = await sql<{ device_name: string; created_at: Date; ip: string | null }[]>`
+    SELECT device_name, created_at, ip FROM device_links WHERE user_code = ${normalizeUserCode(userCode)} AND expires_at > now() AND decided_at IS NULL`;
+  if (!d) throw new ApiError(404, "unknown_code", "This code is unknown or has expired");
+  return { deviceName: d.device_name, createdAt: d.created_at, ip: d.ip };
+}
+
+export async function decideDeviceLink(user: UserContext, userCode: string, approve: boolean, req: Request) {
+  const [d] = await sql<{ id: string; device_name: string }[]>`
+    UPDATE device_links SET approved_by = ${approve ? user.userId : null}, denied = ${!approve}, decided_at = now()
+    WHERE user_code = ${normalizeUserCode(userCode)} AND expires_at > now() AND decided_at IS NULL RETURNING id, device_name`;
+  if (!d) throw new ApiError(404, "unknown_code", "This code is unknown or has expired");
+  await audit({ userId: user.userId, actor: user.role, action: approve ? "device.approved" : "device.denied", entity: "device", entityId: d.id, meta: { name: d.device_name }, ip: clientIp(req) });
+  return { ok: true, approved: approve };
+}
+
+/** Polled by the app with its secret. An approved link is consumed exactly once and becomes a session. */
+export async function pollDeviceLink(deviceCode: string, req: Request) {
+  const hash = sha256(deviceCode);
+  const [d] = await sql<{ id: string; expired: boolean; denied: boolean; approved_by: string | null; consumed_at: Date | null }[]>`
+    SELECT id, expires_at <= now() AS expired, denied, approved_by, consumed_at FROM device_links WHERE device_hash = ${hash}`;
+  if (!d || d.consumed_at) throw new ApiError(404, "unknown_device", "Unknown pairing request");
+  if (d.denied) throw new ApiError(403, "denied", "The pairing request was refused");
+  if (d.expired) throw new ApiError(410, "expired", "The pairing request has expired");
+  if (!d.approved_by) return { status: "pending" as const };
+  const [claimed] = await sql<{ approved_by: string }[]>`
+    UPDATE device_links l SET consumed_at = now() FROM users u
+    WHERE l.id = ${d.id} AND l.consumed_at IS NULL AND u.id = l.approved_by AND u.disabled_at IS NULL RETURNING l.approved_by`;
+  if (!claimed) throw new ApiError(404, "unknown_device", "Unknown pairing request");
+  const s = await insertSession(claimed.approved_by, "device", req, DEVICE_SESSION_DAYS);
+  await audit({ userId: claimed.approved_by, actor: "system", action: "login.device", entity: "device", entityId: d.id, ip: clientIp(req) });
+  return { status: "approved" as const, sessionToken: s.token, csrfToken: s.csrf, expiresAt: s.expires };
 }

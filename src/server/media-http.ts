@@ -4,6 +4,7 @@ import { sql } from "@/lib/db";
 import { SESSION_COOKIE, userFromToken } from "@/lib/session-store";
 import { keys, storage, THUMB_SIZES } from "./storage";
 import { parseRange } from "./range";
+import { env } from "@/lib/env";
 
 /**
  * Private media delivery, served by the Node HTTP server itself (server.ts) rather than by a Next route handler:
@@ -38,6 +39,7 @@ function end(res: ServerResponse, status: number, code?: string, headers: Record
 /** Returns true when the request was a media request (and has been answered). */
 export async function handleMedia(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = new URL(req.url ?? "/", "http://local");
+  if (url.pathname === "/.well-known/apple-app-site-association") return appSiteAssociation(req, res);
   const m = url.pathname.match(/^\/api\/v1\/(stream|art)\/([^/]+)$/);
   if (!m) return false;
   try {
@@ -89,4 +91,17 @@ async function art(req: IncomingMessage, res: ServerResponse, artworkId: string,
   if (!key || size === null) return end(res, 404, "not_found");
   // An artwork id names one immutable image (content-addressed), so the private cache may keep it.
   return send(req, res, key, size, 200, { "Content-Type": thumb ? "image/jpeg" : w.mime, "Content-Length": String(size), "Cache-Control": "private, max-age=31536000, immutable", Vary: "Cookie" });
+}
+
+/**
+ * Lets the native apps listed in APPLE_APP_IDS use this site's passkeys (AuthenticationServices checks this file,
+ * fetched through Apple's CDN, before it offers a credential of this RP ID to the app). Public by design: it holds
+ * application identifiers only.
+ */
+function appSiteAssociation(req: IncomingMessage, res: ServerResponse): true {
+  if (req.method !== "GET" && req.method !== "HEAD") { end(res, 405, "method_not_allowed", { Allow: "GET, HEAD" }); return true; }
+  const body = JSON.stringify({ webcredentials: { apps: env.appleAppIds } });
+  res.writeHead(200, { "Content-Type": "application/json", "Content-Length": String(Buffer.byteLength(body)), "Cache-Control": "public, max-age=3600", "X-Content-Type-Options": "nosniff" });
+  res.end(req.method === "HEAD" ? undefined : body);
+  return true;
 }

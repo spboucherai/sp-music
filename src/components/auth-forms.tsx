@@ -1,7 +1,7 @@
 "use client";
 import { browserSupportsWebAuthn, startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { useEffect, useState } from "react";
-import { api, ApiClientError } from "@/lib/client-api";
+import { api, ApiClientError, setCsrf } from "@/lib/client-api";
 import { I18nProvider, useT, type Locale } from "@/i18n";
 import type { Key } from "@/i18n/messages";
 import { IAlert, ICheck, IKey, ILogo, ISpinner } from "./icons";
@@ -62,7 +62,7 @@ function Unsupported() {
   );
 }
 
-function LoginInner() {
+function LoginInner({ next }: { next: string }) {
   const t = useT();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<Key | null>(null);
@@ -78,7 +78,7 @@ function LoginInner() {
       // The browser shows the system dialog here (Face ID, Touch ID, device code or a nearby phone).
       const response = await startAuthentication({ optionsJSON: options });
       await api("/api/v1/auth/login/verify", { body: { challengeId, response } });
-      window.location.assign("/");
+      window.location.assign(next);
     } catch (e) { setErr(authErrorKey(e)); setBusy(false); }
   };
   const submitCode = async () => {
@@ -183,5 +183,57 @@ function SetupInner() {
   );
 }
 
-export const LoginForm = ({ locale }: { locale: Locale }) => <I18nProvider locale={locale}><LoginInner /></I18nProvider>;
+/** Approval of a native app's pairing code by the signed-in account (see src/lib/auth.ts, device linking). */
+function DeviceInner({ code: initial, csrfToken, displayName }: { code: string; csrfToken: string; displayName: string }) {
+  const t = useT();
+  const [code, setCode] = useState(initial);
+  const [info, setInfo] = useState<{ deviceName: string; ip: string | null } | null>(null);
+  const [phase, setPhase] = useState<"enter" | "confirm" | "approved" | "denied">("enter");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<Key | null>(null);
+  const fail = (e: unknown) => setErr(e instanceof ApiClientError && e.code === "unknown_code" ? "device.err.code" : authErrorKey(e));
+
+  const lookup = async (c: string) => {
+    setBusy(true); setErr(null);
+    try { setCsrf(csrfToken); setInfo(await api("/api/v1/auth/device/info", { body: { userCode: c } })); setPhase("confirm"); }
+    catch (e) { fail(e); } finally { setBusy(false); }
+  };
+  // The app opens this page with its code in the address: show what is being approved straight away.
+  useEffect(() => { if (initial.replace(/-/g, "").length === 8) void lookup(initial); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  const decide = async (approve: boolean) => {
+    setBusy(true); setErr(null);
+    try { setCsrf(csrfToken); await api("/api/v1/auth/device/decide", { body: { userCode: code, approve } }); setPhase(approve ? "approved" : "denied"); }
+    catch (e) { fail(e); setPhase("enter"); } finally { setBusy(false); }
+  };
+  const error = err && <p className="mt-3 flex items-start gap-2 rounded-xl border border-[#6b2428] bg-[#2a1214] p-3 text-sm text-[#ffb4b4]" role="alert"><IAlert size={16} className="mt-0.5 flex-none" />{t(err)}</p>;
+
+  if (phase === "approved") return <Frame title={t("device.approvedTitle")} subtitle={t("device.approvedBody")}><a href="/" className="btn w-full"><ICheck size={18} />{t("device.backToPlayer")}</a></Frame>;
+  if (phase === "denied") return <Frame title={t("device.deniedTitle")} subtitle={t("device.deniedBody")}><a href="/" className="btn w-full">{t("device.backToPlayer")}</a></Frame>;
+  if (phase === "confirm" && info) return (
+    <Frame title={t("device.confirmTitle")} subtitle={t("device.confirmBody", { name: displayName })}>
+      <div className="card p-4 text-center">
+        <p className="text-base font-bold">{info.deviceName || t("device.unnamed")}</p>
+        <p className="mt-2 font-mono text-2xl font-bold tracking-widest">{code}</p>
+        <p className="mt-2 text-xs leading-relaxed text-faint">{t("device.sameCode")}</p>
+      </div>
+      <button className="btn btn-primary mt-4 w-full !min-h-12 !text-base" disabled={busy} onClick={() => void decide(true)}>{busy ? <ISpinner size={18} /> : <ICheck size={18} />}{t("device.approve")}</button>
+      <button className="btn mt-2 w-full" disabled={busy} onClick={() => void decide(false)}>{t("device.deny")}</button>
+      {error}
+      <p className="mt-6 text-center text-xs leading-relaxed text-faint">{t("device.note")}</p>
+    </Frame>
+  );
+  return (
+    <Frame title={t("device.enterTitle")} subtitle={t("device.enterBody")}>
+      <form onSubmit={(e) => { e.preventDefault(); void lookup(code); }}>
+        <label className="label" htmlFor="device-code">{t("device.code")}</label>
+        <input id="device-code" className="input text-center font-mono text-lg tracking-widest" placeholder="XXXX-XXXX" autoCapitalize="characters" autoComplete="off" spellCheck={false} maxLength={9} value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} />
+        <button className="btn btn-primary mt-4 w-full !min-h-12" disabled={busy || code.replace(/[^A-Z0-9]/g, "").length !== 8}>{busy ? <ISpinner size={18} /> : <IKey size={18} />}{t("device.continue")}</button>
+      </form>
+      {error}
+    </Frame>
+  );
+}
+
+export const LoginForm = ({ locale, next = "/" }: { locale: Locale; next?: string }) => <I18nProvider locale={locale}><LoginInner next={next} /></I18nProvider>;
+export const DeviceLinkForm = ({ locale, code, csrfToken, displayName }: { locale: Locale; code: string; csrfToken: string; displayName: string }) => <I18nProvider locale={locale}><DeviceInner code={code} csrfToken={csrfToken} displayName={displayName} /></I18nProvider>;
 export const SetupForm = ({ locale }: { locale: Locale }) => <I18nProvider locale={locale}><SetupInner /></I18nProvider>;

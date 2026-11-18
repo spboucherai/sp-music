@@ -3,8 +3,8 @@ import { ApiError, body, clientIp } from "../http";
 import { rateLimit } from "../ratelimit";
 import { safeEqual } from "../crypto";
 import {
-  assertSameOrigin, authenticationOptions, clearSessionCookie, currentUser, loginWithRecoveryCode, registrationOptions, revokeSession,
-  setupTokenInfo, verifyAuthentication, verifyRegistration, type UserContext,
+  assertSameOrigin, authenticationOptions, clearSessionCookie, currentUser, decideDeviceLink, deviceLinkInfo, loginWithRecoveryCode, pollDeviceLink,
+  registrationOptions, revokeSession, setupTokenInfo, startDeviceLink, verifyAuthentication, verifyRegistration, type UserContext,
 } from "../auth";
 import { audit } from "../audit";
 import type { RouteDef } from "./router";
@@ -47,6 +47,33 @@ export const authRoutes: RouteDef<{ ip: string }>[] = [
     assertSameOrigin(req); await rateLimit(`recovery:${ctx.ip}`, 5, 900);
     const b = await body(req, z.object({ code: z.string().min(8).max(40) }));
     return loginWithRecoveryCode(b.code, req);
+  }],
+  // Device linking for native apps (see src/lib/auth.ts). start/poll are called by the app, info/decide by a signed-in browser.
+  ["POST", "device/start", async ({ req, ctx }) => {
+    assertSameOrigin(req); await rateLimit(`device:${ctx.ip}`, 10, 600);
+    const b = await body(req, z.object({ deviceName: z.string().max(80).optional() }).strict());
+    return startDeviceLink(b.deviceName ?? "", req);
+  }],
+  ["POST", "device/poll", async ({ req, ctx }) => {
+    assertSameOrigin(req); await rateLimit(`devicepoll:${ctx.ip}`, 600, 600);
+    const b = await body(req, z.object({ deviceCode: z.string().min(20).max(200) }).strict());
+    return pollDeviceLink(b.deviceCode, req);
+  }],
+  ["POST", "device/info", async ({ req }) => {
+    assertSameOrigin(req);
+    const u = await currentUser();
+    if (!u) throw new ApiError(401, "unauthenticated", "Sign in required");
+    csrfOk(req, u); await rateLimit(`devicecode:${u.userId}`, 30, 600);          // also bounds guessing of someone else's code
+    const b = await body(req, z.object({ userCode: z.string().min(8).max(20) }).strict());
+    return deviceLinkInfo(b.userCode);
+  }],
+  ["POST", "device/decide", async ({ req }) => {
+    assertSameOrigin(req);
+    const u = await currentUser();
+    if (!u) throw new ApiError(401, "unauthenticated", "Sign in required");
+    csrfOk(req, u); await rateLimit(`devicecode:${u.userId}`, 30, 600);
+    const b = await body(req, z.object({ userCode: z.string().min(8).max(20), approve: z.boolean() }).strict());
+    return decideDeviceLink(u, b.userCode, b.approve, req);
   }],
   ["POST", "logout", async ({ req }) => {
     assertSameOrigin(req);

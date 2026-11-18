@@ -68,3 +68,22 @@ aujourd'hui explicitement plutôt que de faire semblant.
 
 `src/i18n/messages.ts` : une ligne par chaîne, `[français, English]`. Le français est la langue par défaut ; la langue
 est une préférence du compte.
+
+## Clients natifs (SP Music pour macOS)
+
+L'application macOS (`ai.spboucher.spmusic`, dépôt `sp-music-macos`) garde sa propre copie du catalogue et lit hors ligne.
+Elle utilise les mêmes surfaces que le site, plus ceci (migration `003_native_clients.sql`) :
+
+| Route | Rôle |
+|---|---|
+| `GET /api/v1/library/sync?since=<rev>` | Catalogue incrémental : artistes, albums, pistes dont la révision dépasse `since`, et pierres tombales des suppressions. Chaque piste porte son fichier (`assetId`, `sha256`, `sizeBytes`, `mime`) pour le téléchargement vérifié. `more: true` = redemander avec le `rev` reçu. |
+| `GET /api/v1/library/sync/me` | Listes (avec leurs entrées), favoris et état de lecture du compte, en une réponse. |
+| `GET` / `POST /api/v1/library/history` | Historique d'écoute ; l'identifiant de chaque événement vient du client (renvoi sans doublon). |
+| `PATCH playlists/:id`, `PUT playlists/:id/order` | Champ facultatif `baseUpdatedAt` : `409 conflict` si la liste a changé depuis la copie du client (modification faite hors ligne). |
+| `POST /api/v1/auth/device/{start,poll,info,decide}` | Association d'appareil (voir SECURITY.md). Page d'approbation : `/appareil`. |
+| `GET /.well-known/apple-app-site-association` | Autorise l'application (`APPLE_APP_IDS`) à utiliser les clés d'accès du site. |
+
+**Révisions.** `artists`, `albums` et `tracks` portent une colonne `rev` tirée d'une seule séquence par un déclencheur ; un
+verrou consultatif de transaction est pris *avant* le tirage, donc les révisions sont validées dans l'ordre croissant et
+la plus haute révision d'une réponse est un curseur sûr. Un changement de fichier (`media_assets`) ou de paroles
+(`lyrics`) fait avancer la révision de la piste. La lecture se fait dans un seul instantané (`REPEATABLE READ`).

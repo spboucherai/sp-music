@@ -15,6 +15,7 @@ interface Passkey { id: string; name: string; deviceType: string | null; backedU
 interface Session { id: string; method: string; userAgent: string; ip: string | null; createdAt: string; lastSeenAt: string; current: boolean }
 
 function describeAgent(ua: string): string {
+  if (/^SPMusic\//.test(ua)) return `SP Music · ${(ua.match(/\(([^;)]+)/)?.[1] ?? "Mac").slice(0, 40)}`;
   const os = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Macintosh/.test(ua) ? "Mac" : /Android/.test(ua) ? "Android" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "";
   const br = /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "";
   return [br, os].filter(Boolean).join(" · ") || ua.slice(0, 40) || "—";

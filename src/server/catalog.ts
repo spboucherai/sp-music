@@ -151,7 +151,8 @@ export async function createPlaylist(userId: string, name: string, trackIds: str
   if (n >= 500) throw new ApiError(409, "limit", "Too many playlists");
   const [p] = await sql<{ id: string }[]>`INSERT INTO playlists (user_id, name) VALUES (${userId}, ${name}) RETURNING id`;
   if (trackIds.length) await addToPlaylist(userId, p.id, trackIds);
-  return { id: p.id };
+  const [now] = await sql<{ updated_at: Date }[]>`SELECT updated_at FROM playlists WHERE id = ${p.id}`;
+  return { id: p.id, updatedAt: now.updated_at };
 }
 
 export async function getPlaylist(userId: string, id: string) {

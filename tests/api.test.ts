@@ -357,6 +357,146 @@ describe("library management", () => {
   });
 });
 
+describe("native clients", () => {
+  const web = new Client();          // a browser, signed in with a passkey
+  const app = new Client();          // the native app: no browser session, only what device linking hands it
+  type Sync = { since: number; rev: number; more: boolean; artists: { id: string; name: string }[]; albums: { id: string; title: string; artistId: string }[];
+    tracks: { id: string; title: string; albumId: string; lyricsState: string | null; file: { assetId: string; sha256: string; sizeBytes: number; mime: string } | null }[];
+    deleted: { kind: string; id: string }[]; counts: { artists: number; albums: number; tracks: number } };
+  let cursor = 0, playlistId = "", stamp = "", someTrack = "";
+
+  it("publishes the app-site-association file for native passkeys", async () => {
+    const r = await anon.req("/.well-known/apple-app-site-association");
+    expect(r.status).toBe(200); expect(r.headers.get("content-type")).toBe("application/json");
+    expect((await r.json()).webcredentials.apps).toEqual(["3YM54G49SN.ai.spboucher.spmusic"]);
+  });
+
+  it("links a device: the app shows a code, a signed-in browser approves it, the app gets its own session", async () => {
+    const inv = await owner.json<{ inviteUrl: string }>("/api/v1/admin/users", { json: { email: "natif@example.test", displayName: "Natif", role: "listener" } });
+    expect((await web.enrol(tokenOf(inv.body.inviteUrl))).status).toBe(200);
+    const start = await app.json<{ deviceCode: string; userCode: string; verificationUrl: string }>("/api/v1/auth/device/start", { json: { deviceName: "MacBook de test" } });
+    expect(start.status).toBe(200); expect(start.body.userCode).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/); expect(start.body.verificationUrl).toContain(`/appareil?code=${start.body.userCode}`);
+    expect((await app.json("/api/v1/auth/device/poll", { json: { deviceCode: start.body.deviceCode } })).body).toMatchObject({ status: "pending" });
+    // The approval needs a session and its CSRF token; a signed-out visitor is sent to sign in and comes back to the code.
+    expect((await anon.json("/api/v1/auth/device/decide", { json: { userCode: start.body.userCode, approve: true } })).status).toBe(401);
+    expect((await web.json("/api/v1/auth/device/decide", { json: { userCode: start.body.userCode, approve: true }, noCsrf: true })).status).toBe(403);
+    const page = await anon.req(`/appareil?code=${start.body.userCode}`); expect(page.status).toBe(307);
+    expect(decodeURIComponent(page.headers.get("location")!)).toContain(`/login?next=/appareil?code=${start.body.userCode}`);
+    expect((await web.req(`/appareil?code=${start.body.userCode}`)).status).toBe(200);
+    expect((await web.json("/api/v1/auth/device/info", { json: { userCode: "ZZZZ-ZZZZ" } })).status).toBe(404);
+    expect((await web.json("/api/v1/auth/device/info", { json: { userCode: start.body.userCode.toLowerCase().replace("-", " ") } })).body).toMatchObject({ deviceName: "MacBook de test" });
+    expect((await web.json("/api/v1/auth/device/decide", { json: { userCode: start.body.userCode, approve: true } })).status).toBe(200);
+    expect((await web.json("/api/v1/auth/device/decide", { json: { userCode: start.body.userCode, approve: true } })).status).toBe(404);     // decided once
+    const done = await app.json<{ status: string; sessionToken: string; csrfToken: string }>("/api/v1/auth/device/poll", { json: { deviceCode: start.body.deviceCode } });
+    expect(done.body.status).toBe("approved"); expect(done.body.sessionToken.length).toBeGreaterThan(30);
+    expect((await app.json("/api/v1/auth/device/poll", { json: { deviceCode: start.body.deviceCode } })).status).toBe(404);                    // consumed once
+    app.cookie = `spmusic_session=${done.body.sessionToken}`;
+    const me = await app.refreshSession();
+    expect(me.authenticated).toBe(true); expect(me.user!.role).toBe("listener"); expect(app.csrf).toBe(done.body.csrfToken);
+    const [row] = await sql`SELECT s.method, s.expires_at > now() + interval '60 days' AS long FROM sessions s JOIN users u ON u.id = s.user_id WHERE u.email = 'natif@example.test' AND s.method = 'device'`;
+    expect(row).toMatchObject({ method: "device", long: true });
+    expect((await sql`SELECT device_hash FROM device_links WHERE user_code = ${start.body.userCode}`)[0].device_hash).not.toBe(start.body.deviceCode);
+    // The browser can see and revoke the device's session like any other.
+    const sessions = await web.json<{ items: { id: string; method: string; userAgent: string }[] }>("/api/v1/me/sessions");
+    expect(sessions.body.items.some((x) => x.method === "device")).toBe(true);
+  });
+
+  it("refuses a denied or expired pairing and never signs in an unapproved one", async () => {
+    const a = await anon.json<{ deviceCode: string; userCode: string }>("/api/v1/auth/device/start", { json: {} });
+    expect((await web.json("/api/v1/auth/device/decide", { json: { userCode: a.body.userCode, approve: false } })).body).toMatchObject({ approved: false });
+    expect((await anon.json("/api/v1/auth/device/poll", { json: { deviceCode: a.body.deviceCode } })).status).toBe(403);
+    const b = await anon.json<{ deviceCode: string; userCode: string }>("/api/v1/auth/device/start", { json: {} });
+    await sql`UPDATE device_links SET expires_at = now() - interval '1 second' WHERE user_code = ${b.body.userCode}`;
+    expect((await web.json("/api/v1/auth/device/decide", { json: { userCode: b.body.userCode, approve: true } })).status).toBe(404);
+    expect((await anon.json("/api/v1/auth/device/poll", { json: { deviceCode: b.body.deviceCode } })).status).toBe(410);
+    expect((await anon.json("/api/v1/auth/device/poll", { json: { deviceCode: "x".repeat(43) } })).status).toBe(404);
+  });
+
+  it("sends the whole catalogue first, with what a client needs to download and verify each file", async () => {
+    expect((await anon.req("/api/v1/library/sync")).status).toBe(401);
+    const full = (await app.json<Sync>("/api/v1/library/sync?since=0")).body;
+    const n = (await sql`SELECT (SELECT count(*)::int FROM tracks) AS tracks, (SELECT count(*)::int FROM albums) AS albums, (SELECT count(*)::int FROM artists) AS artists`)[0];
+    expect(full.more).toBe(false); expect(full.counts).toEqual({ artists: n.artists, albums: n.albums, tracks: n.tracks });
+    expect(full.tracks.length).toBe(n.tracks); expect(full.albums.length).toBe(n.albums); expect(full.artists.length).toBe(n.artists);
+    const t = full.tracks.find((x) => x.id === trackB)!; someTrack = t.id;
+    expect(t.file!.sha256).toMatch(/^[0-9a-f]{64}$/); expect(t.file!.mime).toBe("audio/flac");
+    const bytes = Buffer.from(await (await app.req(`/api/v1/stream/${t.id}`)).arrayBuffer());
+    expect(bytes.length).toBe(t.file!.sizeBytes);
+    expect((await import("node:crypto")).createHash("sha256").update(bytes).digest("hex")).toBe(t.file!.sha256);
+    expect(full.albums.every((a) => full.artists.some((x) => x.id === a.artistId))).toBe(true);
+    cursor = full.rev;
+    expect((await app.json<Sync>(`/api/v1/library/sync?since=${cursor}`)).body).toMatchObject({ rev: cursor, tracks: [], albums: [], artists: [], deleted: [] });
+    expect((await app.json("/api/v1/library/sync?since=-1")).status).toBe(400);
+  });
+
+  it("then sends only what changed: edits, new files, lyrics and deletions", async () => {
+    await owner.json("/api/v1/admin/tracks", { method: "PATCH", json: { ids: [someTrack], patch: { title: "Onde B (sync)" } } });
+    let d = (await app.json<Sync>(`/api/v1/library/sync?since=${cursor}`)).body;
+    expect(d.tracks.map((t) => [t.id, t.title])).toEqual([[someTrack, "Onde B (sync)"]]); expect(d.rev).toBeGreaterThan(cursor); cursor = d.rev;
+
+    const up = await owner.upload("z-sync.flac", fixture("z1.flac").subarray(0));     // same content as an indexed file → duplicate, no change
+    expect(up.body.status).toBe("duplicate");
+    expect((await app.json<Sync>(`/api/v1/library/sync?since=${cursor}`)).body.tracks).toEqual([]);
+
+    await sql`INSERT INTO lyrics (track_id, state, source, lines) VALUES (${someTrack}, 'ready', 'manual', '[]') ON CONFLICT (track_id) DO UPDATE SET state = 'ready'`;
+    d = (await app.json<Sync>(`/api/v1/library/sync?since=${cursor}`)).body;
+    expect(d.tracks.map((t) => [t.id, t.lyricsState])).toEqual([[someTrack, "ready"]]); cursor = d.rev;
+    await sql`DELETE FROM lyrics WHERE track_id = ${someTrack}`;
+    cursor = (await app.json<Sync>(`/api/v1/library/sync?since=${cursor}`)).body.rev;
+
+    const [victim] = await sql<{ id: string; album_id: string }[]>`SELECT t.id, t.album_id FROM tracks t JOIN albums al ON al.id = t.album_id WHERE al.title = 'Zippé' ORDER BY t.track_no LIMIT 1`;
+    await owner.json("/api/v1/admin/tracks/delete", { json: { ids: [victim.id], confirm: true } });
+    d = (await app.json<Sync>(`/api/v1/library/sync?since=${cursor}`)).body;
+    expect(d.deleted).toContainEqual(expect.objectContaining({ kind: "track", id: victim.id }));
+    expect(d.counts.tracks).toBe((await sql`SELECT count(*)::int AS n FROM tracks`)[0].n); cursor = d.rev;
+    // Revisions are strictly increasing and unique across the three tables.
+    const revs = await sql<{ rev: string }[]>`SELECT rev FROM artists UNION ALL SELECT rev FROM albums UNION ALL SELECT rev FROM tracks UNION ALL SELECT rev FROM library_tombstones`;
+    expect(new Set(revs.map((r) => r.rev)).size).toBe(revs.length);
+  });
+
+  it("sends an account's playlists, favourites and playback state in one answer, and only its own", async () => {
+    const pl = await app.json<{ id: string; updatedAt: string }>("/api/v1/library/playlists", { json: { name: "Hors ligne", trackIds: [someTrack] } });
+    expect(pl.status).toBe(200); playlistId = pl.body.id; stamp = pl.body.updatedAt;
+    await app.json(`/api/v1/library/favorites/track/${someTrack}`, { method: "PUT" });
+    const me = (await app.json<{ playlists: { id: string; name: string; updatedAt: string; entries: { entryId: string; trackId: string; position: number }[] }[]; favoriteTracks: { id: string }[]; favoriteAlbums: unknown[]; playback: unknown }>("/api/v1/library/sync/me")).body;
+    expect(me.playlists).toHaveLength(1); expect(me.playlists[0]).toMatchObject({ id: playlistId, name: "Hors ligne", updatedAt: stamp });
+    expect(me.playlists[0].entries.map((e) => e.trackId)).toEqual([someTrack]); expect(me.favoriteTracks.map((f) => f.id)).toEqual([someTrack]);
+    const other = (await owner.json<{ playlists: { id: string }[] }>("/api/v1/library/sync/me")).body;
+    expect(other.playlists.some((p) => p.id === playlistId)).toBe(false);
+  });
+
+  it("refuses an offline playlist edit made on a stale copy instead of overwriting the newer one", async () => {
+    await sleep(5);
+    const renamed = await app.json<{ updatedAt: string }>(`/api/v1/library/playlists/${playlistId}`, { method: "PATCH", json: { name: "Renommée ailleurs" } });
+    expect(new Date(renamed.body.updatedAt).getTime()).toBeGreaterThan(new Date(stamp).getTime());
+    const stale = await app.json(`/api/v1/library/playlists/${playlistId}/order`, { method: "PUT", json: { entryIds: [], baseUpdatedAt: stamp } });
+    expect(stale.status).toBe(409); expect(stale.body.error!.code).toBe("conflict");
+    expect((await app.json(`/api/v1/library/playlists/${playlistId}`, { method: "PATCH", json: { name: "Écrasée", baseUpdatedAt: stamp } })).status).toBe(409);
+    expect((await sql`SELECT count(*)::int AS n FROM playlist_tracks WHERE playlist_id = ${playlistId}`)[0].n).toBe(1);                         // untouched
+    const fresh = await app.json<{ updatedAt: string }>(`/api/v1/library/playlists/${playlistId}/order`, { method: "PUT", json: { entryIds: [], baseUpdatedAt: renamed.body.updatedAt } });
+    expect(fresh.status).toBe(200); expect(fresh.body.updatedAt).toBeTruthy();
+  });
+
+  it("stores listening history once per event, per account", async () => {
+    const ev = { id: "11111111-1111-4111-8111-111111111111", trackId: someTrack, playedAt: new Date(Date.now() - 60_000).toISOString(), listenedMs: 4200, completed: true, source: "local" };
+    const gone = { ...ev, id: "22222222-2222-4222-8222-222222222222", trackId: "00000000-0000-4000-8000-000000000000" };
+    expect((await app.json("/api/v1/library/history", { json: { events: [ev, gone] } })).body).toMatchObject({ stored: 1, skipped: 1 });
+    expect((await app.json("/api/v1/library/history", { json: { events: [ev] } })).body).toMatchObject({ stored: 0, skipped: 1 });           // retry: no duplicate
+    const h = (await app.json<{ items: { id: string; trackId: string; completed: boolean; source: string }[]; total: number }>("/api/v1/library/history")).body;
+    expect(h.total).toBe(1); expect(h.items[0]).toMatchObject({ id: ev.id, trackId: someTrack, completed: true, source: "local" });
+    expect((await owner.json<{ total: number }>("/api/v1/library/history")).body.total).toBe(0);
+    expect((await app.json("/api/v1/library/history", { json: { events: [{ ...ev, extra: 1 }] } })).status).toBe(400);
+  });
+
+  it("ends when the account revokes the device's session", async () => {
+    const sessions = await web.json<{ items: { id: string; method: string }[] }>("/api/v1/me/sessions");
+    const dev = sessions.body.items.find((x) => x.method === "device")!;
+    expect((await web.json(`/api/v1/me/sessions/${dev.id}`, { method: "DELETE" })).status).toBe(200);
+    expect((await app.req("/api/v1/library/sync")).status).toBe(401);
+    expect((await app.req(`/api/v1/stream/${someTrack}`)).status).toBe(401);
+  });
+});
+
 describe("lyrics", () => {
   const enabled = process.env.LYRICS === "manual" && existsSync(`${process.env.TEST_FIXTURES}/speech.flac`);
   it.skipIf(!enabled)("transcribes a track with word timings, marks an instrumental as empty, and keeps hand corrections", async () => {

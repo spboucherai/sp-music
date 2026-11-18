@@ -23,6 +23,16 @@
 - **Aucune inscription publique.** Un compte n'existe que parce qu'un administrateur l'a créé (`/admin` → Comptes) ; il reçoit un lien d'inscription à usage unique, affiché une seule fois (72 h).
 - **Récupération** : (1) huit codes à usage unique, affichés une fois à la première clé, stockés hachés ; (2) pour le propriétaire, depuis le shell du nœud : `tsx scripts/setup-token.ts [--recovery]` ; `--recovery` remplace toutes les clés et ferme toutes les sessions ; (3) pour les autres comptes, un nouveau lien émis par un administrateur. Il n'existe aucune autre voie.
 
+## Association d'appareil (applications natives)
+
+L'application affiche un code court (`XXXX-XXXX`, 10 minutes) et ouvre `/appareil?code=…` ; un navigateur **déjà connecté
+par clé d'accès** l'approuve (session + jeton CSRF + origine exigés) ; l'application, qui interroge `device/poll` avec
+son propre secret (seul son SHA-256 est en base), reçoit alors **sa propre session** (méthode `device`, 90 jours),
+visible et révocable dans « Compte ». Une association ne sert qu'une fois ; refusée, expirée ou inconnue, elle ne donne
+rien. Débit limité : création 10 / 10 min par adresse, saisie de codes 30 / 10 min par compte. L'application peut aussi
+se connecter directement par clé d'accès (AuthenticationServices) : même vérification serveur que le navigateur, l'origine
+signée étant celle du site.
+
 ## Sessions
 
 Cookie `spmusic_session` : jeton aléatoire de 256 bits (seul son SHA-256 est en base), `HttpOnly`, `Secure` en production, `SameSite=Lax`, sans attribut `Domain` (jamais envoyé à un autre sous-domaine de spboucher.ai), 30 jours. Un nouveau jeton à chaque authentification. Révocation côté serveur : par l'utilisateur (une session, ou toutes les autres), par un administrateur (toutes les sessions d'un compte), par la suspension du compte, par la récupération.

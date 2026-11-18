@@ -6,6 +6,7 @@ import { rateLimit } from "../ratelimit";
 import type { UserContext } from "../auth";
 import * as cat from "@/server/catalog";
 import { getLyrics } from "@/server/lyrics";
+import { assertPlaylistBase, librarySync, listPlays, playlistStamp, recordPlays, userSync } from "@/server/sync";
 import { ids, oneOf, page, playbackState, playlistName, uuid } from "./schemas";
 import type { RouteDef } from "./router";
 
@@ -26,10 +27,39 @@ export const libraryRoutes: RouteDef<UserContext>[] = [
   ["GET", "playlists", async ({ ctx }) => ({ items: await cat.listPlaylists(ctx.userId) })],
   ["POST", "playlists", async ({ req, ctx }) => { const b = await body(req, z.object({ name: playlistName.shape.name, trackIds: z.array(uuid).max(500).optional() }).strict()); return cat.createPlaylist(ctx.userId, b.name, b.trackIds ?? []); }],
   ["GET", "playlists/:id", ({ params, ctx }) => cat.getPlaylist(ctx.userId, uuid.parse(params.id))],
-  ["PATCH", "playlists/:id", async ({ req, params, ctx }) => { const b = await body(req, playlistName); await cat.renamePlaylist(ctx.userId, uuid.parse(params.id), b.name); }],
+  // baseUpdatedAt (optional, sent by clients that edit offline): the change is refused with 409 when the list moved on since.
+  ["PATCH", "playlists/:id", async ({ req, params, ctx }) => {
+    const id = uuid.parse(params.id);
+    const b = await body(req, z.object({ name: playlistName.shape.name, baseUpdatedAt: z.string().max(40).optional() }).strict());
+    await assertPlaylistBase(ctx.userId, id, b.baseUpdatedAt);
+    await cat.renamePlaylist(ctx.userId, id, b.name);
+    return playlistStamp(ctx.userId, id);
+  }],
   ["DELETE", "playlists/:id", async ({ params, ctx }) => { await cat.deletePlaylist(ctx.userId, uuid.parse(params.id)); }],
-  ["POST", "playlists/:id/tracks", async ({ req, params, ctx }) => { const b = await body(req, z.object({ trackIds: ids }).strict()); return cat.addToPlaylist(ctx.userId, uuid.parse(params.id), b.trackIds); }],
-  ["PUT", "playlists/:id/order", async ({ req, params, ctx }) => { const b = await body(req, z.object({ entryIds: z.array(uuid).max(5000) }).strict()); await cat.reorderPlaylist(ctx.userId, uuid.parse(params.id), b.entryIds); }],
+  ["POST", "playlists/:id/tracks", async ({ req, params, ctx }) => {
+    const id = uuid.parse(params.id);
+    const b = await body(req, z.object({ trackIds: ids }).strict());
+    const r = await cat.addToPlaylist(ctx.userId, id, b.trackIds);
+    return { ...r, updatedAt: (await playlistStamp(ctx.userId, id)).updatedAt };
+  }],
+  ["PUT", "playlists/:id/order", async ({ req, params, ctx }) => {
+    const id = uuid.parse(params.id);
+    const b = await body(req, z.object({ entryIds: z.array(uuid).max(5000), baseUpdatedAt: z.string().max(40).optional() }).strict());
+    await assertPlaylistBase(ctx.userId, id, b.baseUpdatedAt);
+    await cat.reorderPlaylist(ctx.userId, id, b.entryIds);
+    return playlistStamp(ctx.userId, id);
+  }],
+
+  // Native clients: catalogue deltas, the account's own data in one answer, listening history.
+  ["GET", "sync", ({ url }) => { const since = Number(url.searchParams.get("since") ?? 0); if (!Number.isSafeInteger(since) || since < 0) throw new ApiError(400, "invalid_input", "since must be a revision"); return librarySync(since); }],
+  ["GET", "sync/me", ({ ctx }) => userSync(ctx.userId)],
+  ["GET", "history", ({ url, ctx }) => listPlays(ctx.userId, page(url, 100, 500))],
+  ["POST", "history", async ({ req, ctx }) => {
+    const b = await body(req, z.object({ events: z.array(z.object({
+      id: uuid, trackId: uuid, playedAt: z.string().max(40), listenedMs: z.number().int().min(0).max(86_400_000), completed: z.boolean(), source: z.enum(["stream", "local"]),
+    }).strict()).max(500) }).strict());
+    return recordPlays(ctx.userId, req.headers.get("user-agent") ?? "", b.events);
+  }],
 
   ["GET", "playback", ({ ctx }) => cat.getPlayback(ctx.userId)],
   ["PUT", "playback", async ({ req, ctx }) => { await cat.savePlayback(ctx.userId, await body(req, playbackState)); }],
