@@ -368,7 +368,7 @@ describe("native clients", () => {
   it("publishes the app-site-association file for native passkeys", async () => {
     const r = await anon.req("/.well-known/apple-app-site-association");
     expect(r.status).toBe(200); expect(r.headers.get("content-type")).toBe("application/json");
-    expect((await r.json()).webcredentials.apps).toEqual(["3YM54G49SN.ai.spboucher.spmusic"]);
+    expect((await r.json()).webcredentials.apps).toEqual(["3YM54G49SN.ai.spboucher.spmusic", "3YM54G49SN.ai.spboucher.spmusic.ios"]);
   });
 
   it("links a device: the app shows a code, a signed-in browser approves it, the app gets its own session", async () => {

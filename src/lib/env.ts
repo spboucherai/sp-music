@@ -59,5 +59,5 @@ export const env = {
   get backupDir() { return opt("BACKUP_DIR"); },
 
   /** Apple app identifiers (TeamID.bundleId, comma-separated) allowed to use this site's passkeys natively. */
-  get appleAppIds() { return (opt("APPLE_APP_IDS") ?? "3YM54G49SN.ai.spboucher.spmusic").split(",").map((s) => s.trim()).filter(Boolean); },
+  get appleAppIds() { return (opt("APPLE_APP_IDS") ?? "3YM54G49SN.ai.spboucher.spmusic,3YM54G49SN.ai.spboucher.spmusic.ios").split(",").map((s) => s.trim()).filter(Boolean); },
 };
